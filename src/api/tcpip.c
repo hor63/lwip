@@ -90,21 +90,36 @@ again:
 
   sleeptime = sys_timeouts_sleeptime();
   if (sleeptime == SYS_TIMEOUTS_SLEEPTIME_INFINITE) {
+    *msg = NULL;
     UNLOCK_TCPIP_CORE();
-    sys_arch_mbox_fetch(mbox, msg, 0);
+    /* Even if there is no timer currently do not sleep forever
+     * If there is a timer added by anther thread in the meantime
+     * the TCP thread will wake up in reasonable time and process the new timer.
+     */
+    sys_arch_mbox_fetch(mbox, msg, 500);
     LOCK_TCPIP_CORE();
+    if (!(*msg)) {
+    	goto again;
+    }
     return;
   } else if (sleeptime == 0) {
     sys_check_timeouts();
-    /* We try again to fetch a message from the mbox. */
-    goto again;
+    /* Only if the sleeptime was 0 return to the top immediately
+     * Otherwise I am ending in an endless active polling loop waiting for the timer to expire
+     * But I am never releasing the mutex around the TCP lock in the meantime!
+     */
+    if (sleeptime == 0) {
+    	/* A timer expired and was processed immediately */
+    	goto again;
+    }
   }
 
   UNLOCK_TCPIP_CORE();
+  *msg = NULL;
   res = sys_arch_mbox_fetch(mbox, msg, sleeptime);
   LOCK_TCPIP_CORE();
-  if (res == SYS_ARCH_TIMEOUT) {
-    /* If a SYS_ARCH_TIMEOUT value is returned, a timeout occurred
+  if (!(*msg)) {
+    /* If no message is returned, a timeout occurred
        before a message could be fetched. */
     sys_check_timeouts();
     /* We try again to fetch a message from the mbox. */
